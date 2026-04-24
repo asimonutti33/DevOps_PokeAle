@@ -30,5 +30,5 @@ git clone https://github.com/asimonutti33/DevOps_PokeAle.git
 cd DevOps_PokeAle
 
 4. Ejecuta el Script de Despliegue:
-chmod +x deploy.sh
-sudo ./deploy.sh
+chmod +x deploy_poke.sh
+sudo ./deploy_poke.sh
