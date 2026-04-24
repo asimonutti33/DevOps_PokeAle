@@ -1,12 +1,23 @@
 #!/bin/bash
 
-set -e  # Detiene el script si hay error
+set -e
 
 # VARIABLES
 APP_NAME="pokeale"
 APP_DIR="/var/www/html/${APP_NAME}"
 NGINX_CONF="/etc/nginx/sites-available/${APP_NAME}"
 INDEX_FILE="${APP_DIR}/index.html"
+
+# Detectar usuario de Nginx (www-data en Debian/Ubuntu, nginx en otros)
+if id "www-data" &>/dev/null; then
+    NGINX_USER="www-data"
+elif id "nginx" &>/dev/null; then
+    NGINX_USER="nginx"
+else
+    echo "⚠️ No se encontró usuario www-data ni nginx. Usando el usuario actual."
+    NGINX_USER=$(whoami)
+fi
+echo "✅ Usuario de Nginx detectado: ${NGINX_USER}"
 
 # 1 - Verificar/Instalar Nginx
 if ! command -v nginx &> /dev/null; then
@@ -24,71 +35,57 @@ fi
 echo "📁 Creando directorio ${APP_DIR}..."
 sudo mkdir -p ${APP_DIR}
 
-# 3 - Copiar el archivo HTML (ajusta la ruta de origen si es necesario)
-#    Asumo que tu archivo pokeale.html está en el mismo directorio que el script
-if [ -f "./pokeale.html" ]; then
-    sudo cp ./pokeale.html ${INDEX_FILE}
-    echo "📄 Archivo HTML copiado correctamente."
-elif [ -f "./index.html" ]; then
+# 3 - Copiar el archivo HTML
+if [ -f "./index.html" ]; then
     sudo cp ./index.html ${INDEX_FILE}
     echo "📄 Archivo index.html copiado correctamente."
 else
-    echo "⚠️  No se encontró el archivo HTML. Creando uno de prueba..."
-    sudo tee ${INDEX_FILE} > /dev/null <<'HTML'
-<!DOCTYPE html>
-<html>
-<head><title>Pokédex</title><meta charset="UTF-8"></head>
-<body>
-    <h1>Pokédex - Sube tu archivo HTML</h1>
-    <p>Por favor, copia el código de la aplicación en este archivo.</p>
-</body>
-</html>
-HTML
+    echo "❌ ERROR: No se encontró el archivo index.html en el directorio actual."
+    exit 1
 fi
 
-# 4 - Asignar permisos correctos
-sudo chown -R www-data:www-data ${APP_DIR}
+# 4 - Asignar permisos con el usuario correcto
+sudo chown -R ${NGINX_USER}:${NGINX_USER} ${APP_DIR}
 sudo chmod -R 755 ${APP_DIR}
+echo "🔒 Permisos asignados a ${NGINX_USER}"
 
-# 5 - Configurar Nginx (CORREGIDO)
-echo "⚙️  Configurando Nginx..."
+# 5 - Configurar Nginx
+echo "⚙️ Configurando Nginx..."
 sudo tee ${NGINX_CONF} > /dev/null <<EOL
 server {
     listen 80;
-    server_name ${APP_NAME}.local;  # ← punto y coma y nombre válido
+    server_name ${APP_NAME}.local;
 
     root ${APP_DIR};
     index index.html;
 
     location / {
-        try_files \$uri \$uri/ /index.html;  # ← CORREGIDO para SPA
+        try_files \$uri \$uri/ /index.html;
     }
 
-    # Opcional: caché para assets
     location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
         expires 30d;
         add_header Cache-Control "public, immutable";
     }
 
-    # Opcional: logs específicos
     access_log /var/log/nginx/${APP_NAME}_access.log;
     error_log /var/log/nginx/${APP_NAME}_error.log;
 }
 EOL
 
-# 6 - Activar el sitio (habilitar si no está linkeado)
+# 6 - Activar el sitio
 if [ ! -L "/etc/nginx/sites-enabled/${APP_NAME}" ]; then
     sudo ln -s ${NGINX_CONF} /etc/nginx/sites-enabled/
     echo "🔗 Sitio habilitado."
 else
-    echo "ℹ️  El sitio ya estaba habilitado."
+    echo "ℹ️ El sitio ya estaba habilitado."
 fi
 
-# 7 - Validar configuración de Nginx
+# 7 - Validar configuración
 echo "🔍 Validando configuración..."
 sudo nginx -t
 
-# 8 - Recargar Nginx (más suave que restart)
+# 8 - Recargar Nginx
 sudo systemctl reload nginx
 
 # 9 - Mensaje final
@@ -96,8 +93,7 @@ echo "========================================="
 echo "✅ ¡Despliegue completado con éxito!"
 echo "🌐 Tu aplicación: http://${APP_NAME}.local"
 echo "📂 Directorio: ${APP_DIR}"
+echo "🔒 Usuario Nginx: ${NGINX_USER}"
 echo "========================================="
-
-# Extra: mostrar IP local útil
 echo "📍 También puedes acceder con: http://$(hostname -I | awk '{print $1}')"
 
