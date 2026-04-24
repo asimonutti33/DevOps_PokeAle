@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Pokédex - Batalla Pokémon</title>
+  <!-- TailwindCSS + Google Fonts + Font Awesome -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,600;14..32,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  <!-- Howler.js para sonido simple -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/howler/2.2.4/howler.min.js"></script>
+  <style>
+    * { font-family: 'Inter', sans-serif; }
+    /* Transiciones y animaciones globales */
+    .card-hover {
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .card-hover:hover {
+      transform: translateY(-6px);
+      box-shadow: 0 20px 25px -12px rgba(0,0,0,0.25);
+    }
+    .skeleton {
+      background: linear-gradient(90deg, #e0e0e0 25%, #f0f0f0 50%, #e0e0e0 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.2s infinite;
+    }
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .progress-bar {
+      transition: width 0.4s cubic-bezier(0.2, 0.9, 0.4, 1.1);
+    }
+    .battle-animation {
+      animation: shake 0.3s ease-in-out 0s 2;
+    }
+    @keyframes shake {
+      0%,100%{ transform: translateX(0); }
+      25%{ transform: translateX(-5px); }
+      75%{ transform: translateX(5px); }
+    }
+    .fade-in {
+      animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px);}
+      to { opacity: 1; transform: translateY(0);}
+    }
+    body.dark {
+      background-color: #1a1e2c;
+      color: #f0f3fa;
+    }
+    .type-badge {
+      border-radius: 9999px;
+      padding: 0.2rem 0.8rem;
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-shadow: 0 0 2px rgba(0,0,0,0.1);
+    }
+    /* scrollbar moderna */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
+    ::-webkit-scrollbar-thumb { background: #c0c0c0; border-radius: 10px; }
+    .dark ::-webkit-scrollbar-track { background: #2d3748; }
+    .dark ::-webkit-scrollbar-thumb { background: #4a5568; }
+  </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 transition-colors duration-300">
+
+  <div id="app" class="max-w-7xl mx-auto px-4 py-6 md:px-6">
+    <!-- Header con navegación y modo oscuro -->
+    <header class="flex flex-wrap justify-between items-center gap-4 mb-8 pb-2 border-b border-gray-300 dark:border-gray-700">
+      <h1 class="text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-red-600 to-yellow-500 bg-clip-text text-transparent">
+        <i class="fas fa-pokeball text-red-500 mr-2"></i>Pokédex Arena
+      </h1>
+      <div class="flex gap-3 flex-wrap">
+        <button data-route="/" class="nav-btn bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-full font-semibold transition shadow"><i class="fas fa-home mr-1"></i> Inicio</button>
+        <button data-route="/my-pokedex" class="nav-btn bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded-full font-semibold transition"><i class="fas fa-book-open mr-1"></i> Mi Pokédex</button>
+        <button data-route="/battle" class="nav-btn bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-full font-semibold transition"><i class="fas fa-fist-raised mr-1"></i> Batalla</button>
+        <button id="darkModeToggle" class="bg-gray-700 dark:bg-yellow-400 text-white dark:text-gray-900 px-4 py-2 rounded-full font-semibold transition"><i class="fas fa-moon dark:fa-sun"></i> <span class="hidden sm:inline">Modo</span></button>
+      </div>
+    </header>
+
+    <!-- Contenedor dinámico SPA (hash routing) -->
+    <main id="main-content" class="fade-in"></main>
+  </div>
+
+  <script>
+    // ---------- MÓDULO POKEAPI ----------
+    const API_BASE = 'https://pokeapi.co/api/v2';
+    let allPokemonBasic = [];    // { name, url, id, types?, image? }
+    let pokemonDetailsCache = new Map();
+
+    // Sonidos (usando Howler, efectos simples)
+    const battleHitSound = new Howl({ src: ['https://cdn.pixabay.com/download/audio/2022/03/10/audio_c8c8f7c1a0.mp3?filename=hit-60649.mp3'], volume: 0.3 });
+    const catchSound = new Howl({ src: ['https://cdn.pixabay.com/download/audio/2022/01/18/audio_dd0d0b1f2b.mp3?filename=item-collect-18263.mp3'], volume: 0.4 });
+    const battleStartSound = new Howl({ src: ['https://cdn.pixabay.com/download/audio/2022/05/16/audio_dc2c1a0e0b.mp3?filename=sword-slash-1-81234.mp3'], volume: 0.3 });
+
+    async function fetchPokemonList(limit = 151) {
+      const res = await fetch(`${API_BASE}/pokemon?limit=${limit}`);
+      const data = await res.json();
+      const detailed = await Promise.all(data.results.map(async (p, idx) => {
+        const id = idx + 1;
+        const typesRes = await fetch(`${API_BASE}/pokemon/${id}`);
+        const typesData = await typesRes.json();
+        const types = typesData.types.map(t => t.type.name);
+        const image = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${id}.png`;
+        return { name: p.name, id, types, image, url: p.url };
+      }));
+      allPokemonBasic = detailed;
+      return allPokemonBasic;
+    }
+
+    async function getPokemonDetail(idOrName) {
+      if(pokemonDetailsCache.has(idOrName)) return pokemonDetailsCache.get(idOrName);
+      const res = await fetch(`${API_BASE}/pokemon/${idOrName}`);
+      const data = await res.json();
+      const speciesRes = await fetch(`${API_BASE}/pokemon-species/${data.id}`);
+      const species = await speciesRes.json();
+      const detail = {
+        id: data.id,
+        name: data.name,
+        height: data.height / 10,
+        weight: data.weight / 10,
+        types: data.types.map(t => t.type.name),
+        stats: data.stats.map(s => ({ name: s.stat.name, value: s.base_stat })),
+        abilities: data.abilities.map(a => a.ability.name),
+        image: data.sprites.other['official-artwork'].front_default || data.sprites.front_default,
+        species: species.genera.find(g => g.language.name === 'es')?.genus || species.genera[0]?.genus || ''
+      };
+      pokemonDetailsCache.set(idOrName, detail);
+      return detail;
+    }
+
+    // -------- LOCALSTORAGE (capturados) ----------
+    let capturedPokemons = []; // guarda ids
+    function loadCaptured() {
+      const stored = localStorage.getItem('pokedex_captured');
+      if(stored) capturedPokemons = JSON.parse(stored);
+      else capturedPokemons = [];
+    }
+    function saveCaptured() {
+      localStorage.setItem('pokedex_captured', JSON.stringify(capturedPokemons));
+    }
+    function isCaptured(id) { return capturedPokemons.includes(id); }
+    function capturePokemon(id) {
+      if(!isCaptured(id)) {
+        capturedPokemons.push(id);
+        saveCaptured();
+        catchSound.play();
+        return true;
+      }
+      return false;
+    }
+    function releasePokemon(id) {
+      capturedPokemons = capturedPokemons.filter(pid => pid !== id);
+      saveCaptured();
+    }
+
+    // -------- UTILS ----------
+    const typeColors = {
+      normal: '#A8A878', fire: '#F08030', water: '#6890F0', electric: '#F8D030', grass: '#78C850',
+      ice: '#98D8D8', fighting: '#C03028', poison: '#A040A0', ground: '#E0C068', flying: '#A890F0',
+      psychic: '#F85888', bug: '#A8B820', rock: '#B8A038', ghost: '#705898', dragon: '#7038F8',
+      dark: '#705848', steel: '#B8B8D0', fairy: '#EE99AC'
+    };
+    function getTypeColor(type) { return typeColors[type] || '#68A090'; }
+
+    // skeleton loading
+    function renderSkeletonGrid() {
+      return `<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+        ${Array(8).fill().map(() => `<div class="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-md"><div class="skeleton h-32 w-full rounded-xl mb-3"></div><div class="skeleton h-5 w-3/4 mx-auto mb-2"></div><div class="skeleton h-4 w-1/2 mx-auto"></div></div>`).join('')}
+      </div>`;
+    }
+
+    // ---------- PANTALLA PRINCIPAL (lista + filtros) ----------
+    let currentSearch = '', currentTypeFilter = '';
+    async function renderHome() {
+      const container = document.getElementById('main-content');
+      container.innerHTML = renderSkeletonGrid();
+      let pokemonList = allPokemonBasic.length ? allPokemonBasic : await fetchPokemonList(151);
+      // Filtrado
+      let filtered = pokemonList.filter(p => p.name.toLowerCase().includes(currentSearch.toLowerCase()));
+      if(currentTypeFilter) filtered = filtered.filter(p => p.types.includes(currentTypeFilter));
+      // Tipos únicos para filtro
+      const allTypes = [...new Set(pokemonList.flatMap(p => p.types))].sort();
+      const html = `
+        <div class="mb-6 flex flex-col md:flex-row gap-4 justify-between items-center">
+          <div class="relative w-full md:w-72">
+            <i class="fas fa-search absolute left-3 top-3 text-gray-400"></i>
+            <input type="text" id="searchInput" placeholder="Buscar Pokémon..." value="${currentSearch}" class="pl-10 pr-4 py-2 rounded-full w-full border dark:bg-gray-800 dark:border-gray-600">
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button data-type="" class="type-filter-btn px-4 py-1 rounded-full bg-gray-300 dark:bg-gray-700 font-semibold ${!currentTypeFilter ? 'ring-2 ring-red-500' : ''}">Todos</button>
+            ${allTypes.map(t => `<button data-type="${t}" class="type-filter-btn px-4 py-1 rounded-full font-semibold" style="background-color:${getTypeColor(t)}80; color:#1f2937;">${t.toUpperCase()}</button>`).join('')}
+          </div>
+        </div>
+        <div id="pokemonGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+          ${filtered.map(pokemon => `
+            <div class="pokemon-card bg-white dark:bg-gray-800 rounded-2xl overflow-hidden shadow-lg card-hover cursor-pointer" data-id="${pokemon.id}">
+              <div class="relative bg-gradient-to-b from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-800 p-4 flex justify-center">
+                <img data-src="${pokemon.image}" alt="${pokemon.name}" class="pokemon-img lazy h-32 w-32 object-contain transition-all hover:scale-105" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='128' viewBox='0 0 24 24' fill='gray'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3C/svg%3E">
+                ${isCaptured(pokemon.id) ? '<i class="fas fa-check-circle absolute top-2 right-2 text-green-500 text-xl bg-white rounded-full p-1 shadow"></i>' : ''}
+              </div>
+              <div class="p-4 text-center">
+                <div class="flex justify-center gap-1 text-xs text-gray-500">#${String(pokemon.id).padStart(3,'0')}</div>
+                <h3 class="font-bold text-lg capitalize">${pokemon.name}</h3>
+                <div class="flex gap-1 justify-center mt-2">
+                  ${pokemon.types.map(t => `<span class="type-badge text-white text-[10px]" style="background-color:${getTypeColor(t)}">${t}</span>`).join('')}
+                </div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        ${filtered.length === 0 ? '<div class="text-center py-12 text-gray-500">No se encontraron Pokémon 🧐</div>' : ''}
+      `;
+      container.innerHTML = html;
+      // lazy loading images
+      const lazyImages = document.querySelectorAll('.lazy');
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if(entry.isIntersecting) {
+            const img = entry.target;
+            img.src = img.dataset.src;
+            observer.unobserve(img);
+          }
+        });
+      });
+      lazyImages.forEach(img => observer.observe(img));
+      // eventos filtros
+      document.getElementById('searchInput')?.addEventListener('input', (e) => { currentSearch = e.target.value; renderHome(); });
+      document.querySelectorAll('.type-filter-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => { currentTypeFilter = btn.dataset.type || ''; renderHome(); });
+      });
+      document.querySelectorAll('.pokemon-card').forEach(card => {
+        card.addEventListener('click', () => { const id = card.dataset.id; window.location.hash = `detail/${id}`; });
+      });
+    }
+
+    // ---------- DETALLE POKEMON ----------
+    async function renderDetail(id) {
+      const container = document.getElementById('main-content');
+      container.innerHTML = `<div class="flex justify-center py-20"><div class="animate-spin rounded-full h-12 w-12 border-b-2 border-red-500"></div></div>`;
+      const pokemon = await getPokemonDetail(id);
+      const captured = isCaptured(pokemon.id);
+      const totalStat = pokemon.stats.reduce((acc,s)=>acc+s.value,0);
+      const html = `
+        <div class="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl overflow-hidden max-w-4xl mx-auto transition">
+          <div class="md:flex">
+            <div class="md:w-1/2 bg-gradient-to-br from-cyan-100 to-blue-200 dark:from-gray-700 dark:to-gray-800 p-8 flex justify-center items-center">
+              <img src="${pokemon.image}" alt="${pokemon.name}" class="w-64 h-64 object-contain drop-shadow-2xl hover:scale-105 transition">
+            </div>
+            <div class="md:w-1/2 p-6">
+              <div class="flex justify-between items-start">
+                <div><span class="text-gray-500 text-sm">#${String(pokemon.id).padStart(3,'0')}</span><h2 class="text-3xl font-bold capitalize">${pokemon.name}</h2></div>
+                <button id="captureBtn" class="px-5 py-2 rounded-full font-bold ${captured ? 'bg-green-500 text-white' : 'bg-yellow-400 hover:bg-yellow-500'} transition shadow"><i class="fas ${captured ? 'fa-check' : 'fa-pokeball'} mr-1"></i>${captured ? 'Capturado' : 'Capturar'}</button>
+              </div>
+              <div class="flex gap-2 my-3">${pokemon.types.map(t => `<span class="type-badge text-white" style="background-color:${getTypeColor(t)}">${t.toUpperCase()}</span>`).join('')}</div>
+              <p class="text-sm italic text-gray-600 dark:text-gray-300">${pokemon.species}</p>
+              <div class="mt-4"><h3 class="font-semibold">Estadísticas base</h3>${pokemon.stats.map(stat => {
+                const percent = (stat.value / 255) * 100;
+                return `<div class="mb-2"><div class="flex justify-between text-sm"><span class="capitalize">${stat.name.replace('-',' ')}</span><span>${stat.value}</span></div><div class="w-full bg-gray-300 rounded-full h-2"><div class="progress-bar h-2 rounded-full bg-red-500" style="width: ${percent}%"></div></div></div>`;
+              }).join('')}</div>
+              <div class="mt-4"><h3 class="font-semibold">Habilidades</h3><div class="flex flex-wrap gap-2 mt-1">${pokemon.abilities.map(a => `<span class="bg-gray-200 dark:bg-gray-700 px-3 py-1 rounded-full text-sm capitalize">${a}</span>`).join('')}</div></div>
+              <div class="mt-4 text-sm text-gray-600 dark:text-gray-400">Altura: ${pokemon.height}m | Peso: ${pokemon.weight}kg</div>
+            </div>
+          </div>
+          <div class="p-4 bg-gray-50 dark:bg-gray-900 text-center"><button id="backHome" class="text-blue-500 hover:underline"><i class="fas fa-arrow-left"></i> Volver a la lista</button></div>
+        </div>
+      `;
+      container.innerHTML = html;
+      document.getElementById('captureBtn')?.addEventListener('click', () => {
+        if(capturePokemon(pokemon.id)) renderDetail(pokemon.id);
+        else alert("¡Ya lo tienes capturado!");
+      });
+      document.getElementById('backHome')?.addEventListener('click', () => window.location.hash = '/');
+    }
+
+    // ---------- MI POKÉDEX (colección capturada) ----------
+    async function renderMyPokedex() {
+      const container = document.getElementById('main-content');
+      if(capturedPokemons.length === 0) {
+        container.innerHTML = `<div class="text-center py-20 bg-white dark:bg-gray-800 rounded-2xl shadow"><i class="fas fa-sad-tear text-6xl text-gray-400 mb-3"></i><p class="text-xl">Aún no has capturado ningún Pokémon. ¡Ve a la lista y captura algunos!</p><button id="goHomeBtn" class="mt-4 bg-red-500 text-white px-6 py-2 rounded-full">Explorar Pokémon</button></div>`;
+        document.getElementById('goHomeBtn')?.addEventListener('click',()=> window.location.hash = '/');
+        return;
+      }
+      container.innerHTML = `<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6" id="pokedexGrid"></div>`;
+      const grid = document.getElementById('pokedexGrid');
+      grid.innerHTML = renderSkeletonGrid();
+      const capturedDetails = await Promise.all(capturedPokemons.map(id => getPokemonDetail(id)));
+      grid.innerHTML = capturedDetails.map(p => `
+        <div class="bg-white dark:bg-gray-800 rounded-2xl overflow-hidden shadow-lg card-hover relative group">
+          <div class="p-3 flex justify-center bg-gray-100 dark:bg-gray-700"><img src="${p.image}" class="h-32 w-32 object-contain" loading="lazy"></div>
+          <div class="p-3 text-center"><span class="text-gray-500 text-xs">#${String(p.id).padStart(3,'0')}</span><h3 class="font-bold capitalize">${p.name}</h3><div class="flex gap-1 justify-center mt-1">${p.types.map(t=>`<span class="type-badge text-white text-[10px]" style="background:${getTypeColor(t)}">${t}</span>`).join('')}</div>
+          <button data-id="${p.id}" class="release-btn mt-3 text-red-500 text-sm font-semibold hover:bg-red-100 dark:hover:bg-red-900 px-3 py-1 rounded-full transition"><i class="fas fa-trash-alt"></i> Liberar</button>
+          <button data-id="${p.id}" class="view-detail-btn mt-1 text-blue-500 text-xs block w-full">Ver detalle</button>
+          </div>
+        </div>
+      `).join('');
+      document.querySelectorAll('.release-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => { e.stopPropagation(); const id = parseInt(btn.dataset.id); releasePokemon(id); renderMyPokedex(); });
+      });
+      document.querySelectorAll('.view-detail-btn').forEach(btn => {
+        btn.addEventListener('click', () => { const id = btn.dataset.id; window.location.hash = `detail/${id}`; });
+      });
+    }
+
+    // ---------- MODO BATALLA (selección + rival aleatorio)----------
+    let selectedBattlePokemon = null;
+    async function renderBattle() {
+      let all = allPokemonBasic.length ? allPokemonBasic : await fetchPokemonList(151);
+      const container = document.getElementById('main-content');
+      container.innerHTML = `
+        <div class="grid md:grid-cols-2 gap-8">
+          <div class="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-xl">
+            <h2 class="text-2xl font-bold mb-3 text-center"><i class="fas fa-user-astronaut"></i> Tu Pokémon</h2>
+            <select id="selectPokemon" class="w-full p-3 border rounded-xl dark:bg-gray-700 mb-4">
+              <option value="">-- Elige tu luchador --</option>
+              ${all.map(p => `<option value="${p.id}">${p.name.toUpperCase()} #${p.id}</option>`).join('')}
+            </select>
+            <div id="myPokemonPreview" class="text-center p-4 border rounded-xl"><p class="text-gray-400">Selecciona un Pokémon</p></div>
+          </div>
+          <div class="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-xl">
+            <h2 class="text-2xl font-bold mb-3 text-center"><i class="fas fa-dragon"></i> Rival Aleatorio</h2>
+            <button id="randomRivalBtn" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-xl transition">Generar Rival</button>
+            <div id="rivalPreview" class="text-center p-4 mt-4 border rounded-xl"><p class="text-gray-400">Sin rival</p></div>
+          </div>
+        </div>
+        <div class="mt-8 text-center"><button id="fightBtn" disabled class="bg-red-600 text-white px-8 py-3 rounded-full text-xl font-bold shadow-lg disabled:opacity-50 transition">¡COMBATE!</button></div>
+        <div id="battleResult" class="mt-6 text-center text-2xl font-black p-4 rounded-2xl"></div>
+      `;
+      let myPokemonData = null, rivalPokemonData = null;
+      const selectEl = document.getElementById('selectPokemon');
+      const myPreview = document.getElementById('myPokemonPreview');
+      const rivalPreview = document.getElementById('rivalPreview');
+      const fightBtn = document.getElementById('fightBtn');
+      const randomBtn = document.getElementById('randomRivalBtn');
+
+      async function updatePreview() {
+        if(selectEl.value) {
+          const id = parseInt(selectEl.value);
+          myPokemonData = await getPokemonDetail(id);
+          myPreview.innerHTML = `<img src="${myPokemonData.image}" class="w-28 h-28 mx-auto"><h3 class="capitalize font-bold">${myPokemonData.name}</h3><div class="flex gap-1 justify-center">${myPokemonData.types.map(t=>`<span class="type-badge" style="background:${getTypeColor(t)}">${t}</span>`).join('')}</div>`;
+        } else { myPokemonData=null; myPreview.innerHTML='<p class="text-gray-400">Selecciona un Pokémon</p>'; }
+        validateBattle();
+      }
+      async function generateRival() {
+        const randomId = Math.floor(Math.random() * 151) + 1;
+        rivalPokemonData = await getPokemonDetail(randomId);
+        rivalPreview.innerHTML = `<img src="${rivalPokemonData.image}" class="w-28 h-28 mx-auto"><h3 class="capitalize font-bold">${rivalPokemonData.name}</h3><div class="flex gap-1 justify-center">${rivalPokemonData.types.map(t=>`<span class="type-badge" style="background:${getTypeColor(t)}">${t}</span>`).join('')}</div>`;
+        validateBattle();
+      }
+      function validateBattle() { fightBtn.disabled = !(myPokemonData && rivalPokemonData); }
+      selectEl.addEventListener('change', updatePreview);
+      randomBtn.addEventListener('click', generateRival);
+      fightBtn.addEventListener('click', async () => {
+        battleStartSound.play();
+        const resultDiv = document.getElementById('battleResult');
+        resultDiv.innerHTML = '<div class="animate-pulse">¡Batalla en curso! ⚔️</div>';
+        // simulación de stats: suma total de stats
+        const myPower = myPokemonData.stats.reduce((a,b)=>a+b.value,0);
+        const rivalPower = rivalPokemonData.stats.reduce((a,b)=>a+b.value,0);
+        setTimeout(() => {
+          let winnerMsg = '';
+          let winnerName = '';
+          let isPlayerWin = myPower >= rivalPower;
+          if(myPower > rivalPower) { winnerMsg = `✨ ¡${myPokemonData.name.toUpperCase()} ha ganado! ✨`; winnerName = myPokemonData.name; }
+          else if(rivalPower > myPower) { winnerMsg = `💥 ¡${rivalPokemonData.name.toUpperCase()} rival gana! 💥`; winnerName = rivalPokemonData.name; }
+          else { winnerMsg = `🤝 ¡Empate épico! 🤝`; winnerName = 'Empate'; }
+          resultDiv.innerHTML = `<div class="battle-animation bg-yellow-100 dark:bg-yellow-800 p-4 rounded-2xl shadow-inner"><i class="fas fa-trophy text-3xl mr-2"></i>${winnerMsg}</div>`;
+          if(isPlayerWin && !isCaptured(myPokemonData.id)) {
+            resultDiv.innerHTML += `<button id="captureAfterBattle" class="mt-3 bg-green-500 px-4 py-2 rounded-full text-white">¡Capturar ${myPokemonData.name}!</button>`;
+            document.getElementById('captureAfterBattle')?.addEventListener('click',()=>{ capturePokemon(myPokemonData.id); alert(`${myPokemonData.name} añadido a tu Pokédex!`); });
+          }
+          battleHitSound.play();
+        }, 500);
+      });
+    }
+
+    // ---------- ROUTER HASH SPA ----------
+    async function router() {
+      const hash = window.location.hash.slice(1) || '/';
+      const path = hash.split('/')[0];
+      const param = hash.split('/')[1];
+      if(!allPokemonBasic.length) await fetchPokemonList(151);
+      if(path === '' || path === '/') renderHome();
+      else if(path === 'detail' && param) renderDetail(parseInt(param));
+      else if(path === 'my-pokedex') renderMyPokedex();
+      else if(path === 'battle') renderBattle();
+      else renderHome();
+    }
+    window.addEventListener('hashchange', router);
+    // Modo oscuro
+    function initDarkMode() {
+      const isDark = localStorage.getItem('darkMode') === 'true';
+      if(isDark) document.body.classList.add('dark');
+      const toggle = document.getElementById('darkModeToggle');
+      toggle.addEventListener('click', () => {
+        document.body.classList.toggle('dark');
+        localStorage.setItem('darkMode', document.body.classList.contains('dark'));
+      });
+    }
+    // iniciar app
+    (async () => {
+      loadCaptured();
+      await fetchPokemonList(151);
+      initDarkMode();
+      router();
+    })();
+  </script>
+</body>
+</html>
