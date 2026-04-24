@@ -24,8 +24,9 @@ Aplicación web tipo Pokédex con exploración de Pokémon, captura (localStorag
 
 1. **Clona el repositorio en tu servidor:**
 git clone https://github.com/asimonutti33/DevOps_PokeAle.git
+
 cd pokeale-deploy
 
-2. Ejecuta el Script de Despliegue:
+3. Ejecuta el Script de Despliegue:
 chmod +x deploy.sh
 sudo ./deploy.sh
